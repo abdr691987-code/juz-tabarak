@@ -53,6 +53,9 @@ button:disabled { opacity: 0.6; }
 .ios-hint { font-size: 16px; line-height: 1.6; color: #0C447C; background: #E6F1FB; border: 1px solid #378ADD; padding: 6px 10px; margin: 8px 0; }
 .ayah-no { white-space: nowrap; }
 .keyword { font-size: 15px; color: #633806; padding-top: 2px; }
+.meaning { font-size: 16px; line-height: 1.6; color: #042C53; }
+.marker { text-align: center; font-size: 15px; color: #0C447C; border-bottom: 1px solid #BA7517; margin: 4px 24px 6px; padding-bottom: 2px; }
+.jalala { color: #C0262D; }
 
 .steps { border-top: 1px solid #BA7517; padding-top: 6px; margin-top: 6px; text-align: center; font-size: 17px; color: #0C447C; }
 .step-arrow { width: 18px; height: 9px; margin: 0 6px; vertical-align: middle; }
