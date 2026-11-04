@@ -214,6 +214,102 @@
     return group;
   }
 
+  // Search ignores harakat, hamza seats, alif spellings and spaces, so a word typed the usual way
+  // finds its Uthmani spelling (al-salah / al-salawah, ya ayyuha / ya-ayyuha).
+  const HIT_LIMIT = 50;
+  let lastSearch = '';
+
+  function normalizeArabic(text) {
+    let out = '';
+    const list = Array.from(text);
+    for (let i = 0; i < list.length; i += 1) {
+      const c = list[i].charCodeAt(0);
+      const next = i + 1 < list.length ? list[i + 1].charCodeAt(0) : 0;
+      const afterNext = i + 2 < list.length ? list[i + 2].charCodeAt(0) : 0;
+      if (c === 0x648 && next === 0x670) continue; // waw written for a long a
+      if (c === 0x649 && next === 0x670 && afterNext >= 0x621 && afterNext <= 0x64A) continue; // ya written for a long a mid-word
+      if (c === 0x6E7) out += chars(0x64A);
+      else if (c === 0x629) out += chars(0x647);
+      else if (c === 0x649 || c === 0x626) out += chars(0x64A);
+      else if (c === 0x624) out += chars(0x648);
+      else if ((c >= 0x628 && c <= 0x63A) || (c >= 0x641 && c <= 0x64A && c !== 0x649)) out += list[i];
+      else if (c >= 0x30 && c <= 0x39) out += list[i];
+      else if (c >= 0x660 && c <= 0x669) out += String(c - 0x660);
+      // Everything else is dropped: alif forms, hamza, harakat, Quranic marks and spaces.
+    }
+    return out;
+  }
+
+  // "255" opens that ayah of this surah; "2:255" any ayah in the book.
+  function ayahReference(data, number, query) {
+    const plain = query.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660)).trim();
+    const pair = /^(\d+)\s*[:؛،.\/-]\s*(\d+)$/.exec(plain);
+    const single = /^(\d+)$/.exec(plain);
+    const s = pair ? Number(pair[1]) : number;
+    const a = pair ? Number(pair[2]) : single ? Number(single[1]) : 0;
+    if (!a) return null;
+    const surah = data.quran.surahs.find((x) => x.number === s);
+    return surah && surah.ayat.some((x) => x.n === a) ? [{ s, a }] : [];
+  }
+
+  function searchAyat(data, number, query) {
+    const reference = ayahReference(data, number, query);
+    if (reference) return reference;
+    const needle = normalizeArabic(query);
+    if (needle.length < 2) return [];
+    const ordered = data.quran.surahs.filter((s) => s.number === number).concat(data.quran.surahs.filter((s) => s.number !== number));
+    const hits = [];
+    ordered.forEach((surah) => surah.ayat.forEach((ayah) => {
+      if (normalizeArabic(ayah.text).includes(needle)) hits.push({ s: surah.number, a: ayah.n });
+    }));
+    return hits;
+  }
+
+  function renderHits(data, number, query, list) {
+    const t = data.app.surah.search;
+    list.textContent = '';
+    if (!query.trim()) return;
+    const hits = searchAyat(data, number, query);
+    list.appendChild(el('p', 'search-count', hits.length ? t.count + ' ' + digits(hits.length) : t.none));
+    hits.slice(0, HIT_LIMIT).forEach((hit) => {
+      const surah = data.quran.surahs.find((s) => s.number === hit.s);
+      const ayah = surah.ayat.find((a) => a.n === hit.a);
+      const link = el('a', 'search-hit');
+      link.setAttribute('href', '#/surah/' + hit.s + '/' + hit.a);
+      link.setAttribute('data-s', String(hit.s));
+      link.setAttribute('data-a', String(hit.a));
+      link.appendChild(el('span', 'hit-title', data.booklet.surahWord + ' ' + surahName(data, surah) + ' · ' + t.ayahWord + ' ' + digits(hit.a)));
+      const text = el('span', 'hit-text');
+      fillQuranText(text, ayah.text);
+      link.appendChild(text);
+      list.appendChild(link);
+    });
+    if (hits.length > HIT_LIMIT) list.appendChild(el('p', 'note', t.limited));
+  }
+
+  function renderSearch(data, number) {
+    const t = data.app.surah.search;
+    const panel = el('div', 'search-panel');
+    panel.hidden = true;
+    const input = el('input', 'search-input');
+    input.setAttribute('type', 'search');
+    input.setAttribute('placeholder', t.placeholder);
+    input.setAttribute('aria-label', t.placeholder);
+    input.setAttribute('dir', 'rtl');
+    input.value = lastSearch;
+    panel.appendChild(input);
+    panel.appendChild(el('p', 'note', t.hint));
+    const list = el('div', 'search-results');
+    list.setAttribute('role', 'status');
+    panel.appendChild(list);
+    input.addEventListener('input', () => {
+      lastSearch = input.value;
+      renderHits(data, number, input.value, list);
+    });
+    if (lastSearch) renderHits(data, number, lastSearch, list);
+    return panel;
+  }
+
   function renderSurah(data, number) {
     const store = ctx.store || NO_STORE;
     const t = data.app.surah;
@@ -229,7 +325,11 @@
     const controls = el('div', 'surah-controls');
     controls.appendChild(button('play-surah', t.playSurah));
     controls.appendChild(renderRepeat(data, store));
+    const toggle = button('search-toggle', t.search.toggle);
+    toggle.setAttribute('aria-expanded', 'false');
+    controls.appendChild(toggle);
     node.appendChild(controls);
+    node.appendChild(renderSearch(data, number));
     node.appendChild(el('p', 'note', t.hint));
 
     if (hasBasmalah(number)) {
@@ -274,7 +374,14 @@
   function handleSurahClick(event, data, surah, store, node) {
     const target = event.target;
     const chunk = target.closest('.chunk, .chunk.covered');
-    if (target.closest('.ayah')) {
+    if (target.closest('.search-toggle')) {
+      const toggle = target.closest('.search-toggle');
+      const panel = node.querySelector('.search-panel');
+      panel.hidden = !panel.hidden;
+      toggle.setAttribute('aria-expanded', String(!panel.hidden));
+      toggle.textContent = panel.hidden ? data.app.surah.search.toggle : data.app.surah.search.close;
+      if (!panel.hidden) panel.querySelector('.search-input').focus();
+    } else if (target.closest('.ayah')) {
       const span = target.closest('.ayah');
       play([{ s: surah.number, a: Number(span.getAttribute('data-a')) }], store.getRepeat(), surah);
     } else if (target.closest('.play-chunk')) {
@@ -500,8 +607,9 @@
   App.route = (hash) => {
     const data = ctx.data;
     if (ctx.player) ctx.player.stop();
-    const surahMatch = /^#\/surah\/(\d+)$/.exec(hash || '');
+    const surahMatch = /^#\/surah\/(\d+)(?:\/(\d+))?$/.exec(hash || '');
     const number = surahMatch ? Number(surahMatch[1]) : 0;
+    const foundAyah = surahMatch && surahMatch[2] ? Number(surahMatch[2]) : 0;
     let view;
     let current = 'map';
     if (number >= data.config.surahRange[0] && number <= data.config.surahRange[1]) {
@@ -535,6 +643,14 @@
     root.appendChild(frame);
     root.appendChild(renderNav(data, current));
     window.scrollTo(0, 0);
+    // A search result opens its surah with the found ayah marked and in view; a covered chunk is opened.
+    const found = foundAyah && root.querySelector(`.ayah[data-s="${number}"][data-a="${foundAyah}"]`);
+    if (found) {
+      found.classList.add('ayah-found');
+      const chunk = found.closest('.chunk');
+      if (chunk && chunk.classList.contains('covered')) chunk.querySelector('.cover-chunk').click();
+      found.scrollIntoView({ block: 'center' });
+    }
     return view;
   };
 
